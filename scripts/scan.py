@@ -334,8 +334,15 @@ def main() -> None:
     print(f"{len(detections)} found ({detect_time * 1000:.0f}ms)")
 
     if len(detections) == 0:
-        print("\nNo products detected. Try a lower --det-threshold (e.g. 0.3).")
-        sys.exit(0)
+        print("\nNo objects detected. Using whole-image fallback...")
+        img_w, img_h = image.size
+        detections = [Detection(
+            box=(0, 0, img_w, img_h),
+            score=1.0,
+            class_id=-1,
+            class_name="product",
+            crop=image.copy(),
+        )]
 
     # ── Phase 3: Recognize each detection ─────────────────
     print(f"\nRecognizing {len(detections)} detections ...")

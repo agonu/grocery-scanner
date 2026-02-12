@@ -1,9 +1,9 @@
-"""Product detector for shelf images using YOLOv8."""
+"""Product detector for shelf images using YOLOWorld (open-vocabulary)."""
 
 import dataclasses
 from PIL import Image
 
-from src.config import DETECTOR_CONF_THRESHOLD, DETECTOR_MIN_BOX_AREA, DETECTOR_BOX_PADDING
+from src.config import DETECTOR_CONF_THRESHOLD, DETECTOR_MIN_BOX_AREA, DETECTOR_BOX_PADDING, DETECTOR_CLASSES
 
 
 @dataclasses.dataclass
@@ -29,15 +29,16 @@ class Detection:
 
 
 class Detector:
-    """Detect product candidates in shelf images using YOLOv8n."""
+    """Detect product candidates in images using YOLOWorld (open-vocabulary)."""
 
     def __init__(self):
         self._model = None
 
     def load(self) -> None:
-        """Load YOLOv8n with COCO pretrained weights."""
-        from ultralytics import YOLO
-        self._model = YOLO("yolov8n.pt")
+        """Load YOLOWorld with open-vocabulary grocery classes."""
+        from ultralytics import YOLOWorld
+        self._model = YOLOWorld("yolov8s-worldv2.pt")
+        self._model.set_classes(DETECTOR_CLASSES)
 
     def detect(
         self,

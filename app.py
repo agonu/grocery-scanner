@@ -157,13 +157,14 @@ def api_scan():
     detect_ms = int((time.time() - t0) * 1000)
 
     if len(detections) == 0:
-        return jsonify({
-            "num_detections": 0,
-            "image_size": [img_w, img_h],
-            "detections": [],
-            "annotated_image": image_to_base64(image),
-            "timing": {"detect_ms": detect_ms, "recognize_ms": 0, "total_ms": detect_ms},
-        })
+        # Whole-image fallback: treat entire image as one product
+        detections = [Detection(
+            box=(0, 0, img_w, img_h),
+            score=1.0,
+            class_id=-1,
+            class_name="product",
+            crop=image.copy(),
+        )]
 
     # Phase 2: Recognize each detection
     t0 = time.time()

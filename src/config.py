@@ -42,7 +42,11 @@ OCR_ALPHA = 0.85
 OCR_RERANK_DEPTH = 20
 
 # ── Detection ──────────────────────────────────────────
-DETECTOR_CONF_THRESHOLD = 0.5
+DETECTOR_CLASSES = [
+    "grocery product", "bottle", "can", "box", "package",
+    "bag", "jar", "carton", "container",
+]
+DETECTOR_CONF_THRESHOLD = 0.3
 DETECTOR_MIN_BOX_AREA = 400
 DETECTOR_BOX_PADDING = 2
 
