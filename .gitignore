@@ -1,0 +1,38 @@
+# Data & models (too large for git)
+data/
+catalog/
+*.pt
+
+# Generated artifacts
+annotated.jpg
+test_shelf.jpg
+test_shelf.json
+scan_results.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+tunnel
+.claude/

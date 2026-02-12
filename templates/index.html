@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grocery Scanner</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+
+  header { background: #1a73e8; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header span { font-size: 13px; opacity: 0.8; }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  /* Upload area */
+  .upload-area {
+    border: 2px dashed #bbb; border-radius: 12px; padding: 48px 24px;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+    background: #fff; margin-bottom: 24px;
+  }
+  .upload-area:hover, .upload-area.dragover { border-color: #1a73e8; background: #e8f0fe; }
+  .upload-area p { font-size: 15px; color: #666; margin-top: 8px; }
+  .upload-area .icon { font-size: 40px; color: #999; }
+  .upload-area input[type="file"] { display: none; }
+
+  /* Loading */
+  .loading { text-align: center; padding: 40px; display: none; }
+  .spinner {
+    width: 40px; height: 40px; border: 4px solid #e0e0e0; border-top-color: #1a73e8;
+    border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Results section */
+  .results { display: none; }
+
+  /* Annotated image wrapper */
+  .image-wrapper {
+    position: relative; display: inline-block; margin-bottom: 24px;
+    border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    max-width: 100%;
+  }
+  .image-wrapper img { display: block; max-width: 100%; height: auto; }
+  .hotspot {
+    position: absolute; border: 2px solid transparent; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .hotspot:hover { background: rgba(255,255,255,0.2); }
+  .hotspot.tier-CONFIDENT { border-color: #34a853; }
+  .hotspot.tier-AMBIGUOUS { border-color: #fbbc04; }
+  .hotspot.tier-UNKNOWN { border-color: #ea4335; }
+  .hotspot.highlight { background: rgba(255,255,255,0.35); }
+
+  /* Summary bar */
+  .summary-bar {
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    padding: 12px 16px; background: #fff; border-radius: 8px;
+    margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .summary-bar .stat { font-size: 14px; }
+  .summary-bar .stat b { font-weight: 600; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; }
+  .badge-green { background: #34a853; }
+  .badge-yellow { background: #fbbc04; color: #333; }
+  .badge-red { background: #ea4335; }
+
+  /* Detection cards grid */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: #fff; border-radius: 8px; padding: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1); border-left: 4px solid #ccc;
+    transition: box-shadow 0.15s;
+  }
+  .card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.16); }
+  .card.tier-CONFIDENT { border-left-color: #34a853; }
+  .card.tier-AMBIGUOUS { border-left-color: #fbbc04; }
+  .card.tier-UNKNOWN { border-left-color: #ea4335; }
+  .card.highlight { box-shadow: 0 0 0 2px #1a73e8, 0 2px 8px rgba(0,0,0,0.16); }
+
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .card-header h3 { font-size: 15px; font-weight: 600; }
+  .card-score { font-size: 13px; color: #666; }
+
+  .card-body { font-size: 13px; color: #555; }
+  .card-body .label { color: #888; font-size: 12px; margin-top: 6px; }
+
+  /* Candidate buttons for ambiguous */
+  .candidates { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .candidates button {
+    padding: 6px 14px; border: 1px solid #ddd; border-radius: 6px;
+    background: #fff; cursor: pointer; font-size: 13px; transition: all 0.15s;
+  }
+  .candidates button:hover { border-color: #1a73e8; background: #e8f0fe; }
+  .candidates button.selected { border-color: #1a73e8; background: #1a73e8; color: #fff; }
+
+  /* Manual input for unknown */
+  .manual-input { display: flex; gap: 6px; margin-top: 8px; }
+  .manual-input input {
+    flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px;
+    font-size: 13px; outline: none;
+  }
+  .manual-input input:focus { border-color: #1a73e8; }
+  .manual-input button {
+    padding: 6px 12px; border: none; border-radius: 6px;
+    background: #1a73e8; color: #fff; cursor: pointer; font-size: 13px;
+  }
+  .skip-btn {
+    padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px;
+    background: #fff; cursor: pointer; font-size: 12px; color: #888; margin-top: 6px;
+  }
+  .skip-btn:hover { background: #f5f5f5; }
+  .resolved-label { color: #34a853; font-weight: 600; font-size: 13px; margin-top: 8px; }
+
+  /* Finalize */
+  .finalize-section { text-align: center; margin: 24px 0; }
+  .finalize-btn {
+    padding: 12px 32px; border: none; border-radius: 8px;
+    background: #1a73e8; color: #fff; font-size: 15px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .finalize-btn:hover { background: #1557b0; }
+  .finalize-btn:disabled { background: #ccc; cursor: default; }
+
+  /* Shopping list */
+  .shopping-list { display: none; background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); margin-top: 16px; }
+  .shopping-list h2 { font-size: 17px; margin-bottom: 12px; }
+  .shopping-list table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .shopping-list th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #e0e0e0; color: #666; font-weight: 600; }
+  .shopping-list td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }
+  .shopping-list .method { font-size: 12px; color: #888; }
+
+  /* Timing bar */
+  .timing { font-size: 12px; color: #888; margin-top: 8px; text-align: right; }
+
+  /* New scan button */
+  .new-scan-btn {
+    padding: 10px 24px; border: 1px solid #ddd; border-radius: 8px;
+    background: #fff; cursor: pointer; font-size: 14px; margin-top: 16px;
+  }
+  .new-scan-btn:hover { background: #f5f5f5; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Grocery Scanner</h1>
+  <span>Upload a shelf image to detect and identify products</span>
+</header>
+
+<div class="container">
+  <!-- Upload -->
+  <div class="upload-area" id="uploadArea">
+    <div class="icon">&#128247;</div>
+    <p>Drag & drop a shelf image, or click to browse</p>
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+
+  <!-- Loading -->
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Scanning shelf image...</p>
+    <p style="font-size:12px; color:#999; margin-top:4px;">Detecting products, embedding, searching catalog</p>
+  </div>
+
+  <!-- Results -->
+  <div class="results" id="results">
+    <div class="summary-bar" id="summaryBar"></div>
+
+    <div class="image-wrapper" id="imageWrapper">
+      <img id="annotatedImg" src="" alt="Annotated shelf">
+    </div>
+
+    <div class="cards" id="cardsContainer"></div>
+
+    <div class="finalize-section">
+      <button class="finalize-btn" id="finalizeBtn">Finalize Shopping List</button>
+    </div>
+
+    <div class="shopping-list" id="shoppingList"></div>
+
+    <div class="timing" id="timing"></div>
+
+    <div style="text-align:center;">
+      <button class="new-scan-btn" id="newScanBtn">Scan Another Image</button>
+    </div>
+  </div>
+</div>
+
+{% raw %}<script>
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+const loading = document.getElementById('loading');
+const resultsEl = document.getElementById('results');
+const summaryBar = document.getElementById('summaryBar');
+const imageWrapper = document.getElementById('imageWrapper');
+const annotatedImg = document.getElementById('annotatedImg');
+const cardsContainer = document.getElementById('cardsContainer');
+const finalizeBtn = document.getElementById('finalizeBtn');
+const shoppingList = document.getElementById('shoppingList');
+const timingEl = document.getElementById('timing');
+const newScanBtn = document.getElementById('newScanBtn');
+
+let scanData = null;  // holds the full API response
+let overrides = {};   // detection index → product_id
+
+// Upload handlers
+uploadArea.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]); });
+
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+});
+
+newScanBtn.addEventListener('click', resetUI);
+
+function resetUI() {
+  scanData = null;
+  overrides = {};
+  uploadArea.style.display = '';
+  loading.style.display = 'none';
+  resultsEl.style.display = 'none';
+  shoppingList.style.display = 'none';
+  fileInput.value = '';
+}
+
+async function uploadFile(file) {
+  uploadArea.style.display = 'none';
+  loading.style.display = 'block';
+  resultsEl.style.display = 'none';
+
+  const formData = new FormData();
+  formData.append('image', file);
+
+  try {
+    const resp = await fetch('/api/scan', { method: 'POST', body: formData });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      alert('Scan failed: ' + errText);
+      resetUI();
+      return;
+    }
+    scanData = await resp.json();
+    overrides = {};
+    renderResults();
+  } catch (err) {
+    alert('Error: ' + err.message);
+    resetUI();
+  }
+}
+
+function renderResults() {
+  loading.style.display = 'none';
+  resultsEl.style.display = 'block';
+  shoppingList.style.display = 'none';
+
+  const d = scanData;
+  const nConf = d.detections.filter(x => x.tier === 'CONFIDENT').length;
+  const nAmb = d.detections.filter(x => x.tier === 'AMBIGUOUS').length;
+  const nUnk = d.detections.filter(x => x.tier === 'UNKNOWN').length;
+
+  summaryBar.innerHTML = `
+    <div class="stat"><b>${d.num_detections}</b> detected</div>
+    <div class="stat"><span class="badge badge-green">${nConf}</span> confident</div>
+    <div class="stat"><span class="badge badge-yellow">${nAmb}</span> ambiguous</div>
+    <div class="stat"><span class="badge badge-red">${nUnk}</span> unknown</div>
+  `;
+
+  // Annotated image
+  annotatedImg.src = 'data:image/jpeg;base64,' + d.annotated_image;
+
+  // Wait for image to load to position hotspots
+  annotatedImg.onload = () => renderHotspots(d);
+
+  // Detection cards
+  renderCards(d);
+
+  // Timing
+  timingEl.textContent = `Detect: ${d.timing.detect_ms}ms | Recognize: ${d.timing.recognize_ms}ms | Total: ${d.timing.total_ms}ms`;
+}
+
+function renderHotspots(d) {
+  // Remove existing hotspots
+  imageWrapper.querySelectorAll('.hotspot').forEach(el => el.remove());
+
+  const imgW = d.image_size[0];
+  const imgH = d.image_size[1];
+
+  d.detections.forEach((det, i) => {
+    const [x1, y1, x2, y2] = det.box;
+    const hs = document.createElement('div');
+    hs.className = `hotspot tier-${det.tier}`;
+    hs.dataset.index = i;
+    hs.style.left = (x1 / imgW * 100) + '%';
+    hs.style.top = (y1 / imgH * 100) + '%';
+    hs.style.width = ((x2 - x1) / imgW * 100) + '%';
+    hs.style.height = ((y2 - y1) / imgH * 100) + '%';
+
+    hs.addEventListener('click', () => scrollToCard(i));
+    hs.addEventListener('mouseenter', () => highlightCard(i, true));
+    hs.addEventListener('mouseleave', () => highlightCard(i, false));
+
+    imageWrapper.appendChild(hs);
+  });
+}
+
+function scrollToCard(index) {
+  const card = document.querySelector(`.card[data-index="${index}"]`);
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('highlight');
+    setTimeout(() => card.classList.remove('highlight'), 1500);
+  }
+}
+
+function highlightCard(index, on) {
+  const card = document.querySelector(`.card[data-index="${index}"]`);
+  if (card) card.classList.toggle('highlight', on);
+}
+
+function highlightHotspot(index, on) {
+  const hs = imageWrapper.querySelector(`.hotspot[data-index="${index}"]`);
+  if (hs) hs.classList.toggle('highlight', on);
+}
+
+function renderCards(d) {
+  cardsContainer.innerHTML = '';
+
+  d.detections.forEach((det, i) => {
+    const card = document.createElement('div');
+    card.className = `card tier-${det.tier}`;
+    card.dataset.index = i;
+
+    card.addEventListener('mouseenter', () => highlightHotspot(i, true));
+    card.addEventListener('mouseleave', () => highlightHotspot(i, false));
+
+    const topScore = det.top_k.length > 0 ? (det.top_k[0].score * 100).toFixed(1) + '%' : 'N/A';
+    const topPid = det.top_k.length > 0 ? det.top_k[0].product_id : '?';
+
+    let bodyHTML = '';
+
+    if (det.tier === 'CONFIDENT') {
+      bodyHTML = `
+        <div>Product <b>${topPid}</b></div>
+        <div class="label">Auto-added (score: ${topScore}, margin: ${det.confidence.margin.toFixed(3)})</div>
+      `;
+    } else if (det.tier === 'AMBIGUOUS') {
+      bodyHTML = `
+        <div class="label">Pick the correct product:</div>
+        <div class="candidates" id="cand-${i}">
+          ${det.top_k.slice(0, 3).map((c, j) => `
+            <button data-det="${i}" data-pid="${c.product_id}" onclick="pickCandidate(this)">
+              ${c.product_id} (${(c.score*100).toFixed(1)}%)
+            </button>
+          `).join('')}
+        </div>
+        <button class="skip-btn" onclick="skipDetection(${i})">Skip</button>
+        <div class="resolved-label" id="resolved-${i}" style="display:none;"></div>
+      `;
+    } else {
+      // UNKNOWN
+      const bestInfo = det.top_k.length > 0
+        ? `Best guess: ${det.top_k[0].product_id} at ${(det.top_k[0].score*100).toFixed(1)}%`
+        : 'No matches';
+      bodyHTML = `
+        <div class="label">${bestInfo}</div>
+        <div class="manual-input">
+          <input type="text" placeholder="Product ID" id="manual-${i}">
+          <button onclick="manualOverride(${i})">Set</button>
+        </div>
+        <button class="skip-btn" onclick="skipDetection(${i})">Skip</button>
+        <div class="resolved-label" id="resolved-${i}" style="display:none;"></div>
+      `;
+    }
+
+    card.innerHTML = `
+      <div class="card-header">
+        <h3>#${i + 1} ${det.detector_class}</h3>
+        <span class="badge badge-${{CONFIDENT:'green',AMBIGUOUS:'yellow',UNKNOWN:'red'}[det.tier]}">${det.tier}</span>
+      </div>
+      <div class="card-body">${bodyHTML}</div>
+    `;
+
+    cardsContainer.appendChild(card);
+  });
+}
+
+function pickCandidate(btn) {
+  const detIdx = parseInt(btn.dataset.det);
+  const pid = btn.dataset.pid;
+  overrides[detIdx] = pid;
+
+  // Update button styles
+  const container = document.getElementById('cand-' + detIdx);
+  container.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+
+  const resolved = document.getElementById('resolved-' + detIdx);
+  resolved.style.display = 'block';
+  resolved.textContent = 'Selected: Product ' + pid;
+}
+
+function manualOverride(detIdx) {
+  const input = document.getElementById('manual-' + detIdx);
+  const pid = input.value.trim();
+  if (!pid) return;
+
+  overrides[detIdx] = pid;
+  const resolved = document.getElementById('resolved-' + detIdx);
+  resolved.style.display = 'block';
+  resolved.textContent = 'Set: Product ' + pid;
+}
+
+function skipDetection(detIdx) {
+  delete overrides[detIdx];
+  const resolved = document.getElementById('resolved-' + detIdx);
+  resolved.style.display = 'block';
+  resolved.textContent = 'Skipped';
+  resolved.style.color = '#888';
+}
+
+finalizeBtn.addEventListener('click', async () => {
+  finalizeBtn.disabled = true;
+  finalizeBtn.textContent = 'Finalizing...';
+
+  try {
+    const resp = await fetch('/api/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        detections: scanData.detections,
+        overrides: overrides,
+      }),
+    });
+    const data = await resp.json();
+    renderShoppingList(data);
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    finalizeBtn.disabled = false;
+    finalizeBtn.textContent = 'Finalize Shopping List';
+  }
+});
+
+function renderShoppingList(data) {
+  shoppingList.style.display = 'block';
+
+  let rows = data.items.map(item => `
+    <tr>
+      <td>${item.index + 1}</td>
+      <td><b>${item.product_id}</b></td>
+      <td>${(item.score * 100).toFixed(1)}%</td>
+      <td><span class="method">${item.method}</span></td>
+    </tr>
+  `).join('');
+
+  shoppingList.innerHTML = `
+    <h2>Shopping List (${data.items.length} items)</h2>
+    <table>
+      <tr><th>#</th><th>Product</th><th>Score</th><th>Method</th></tr>
+      ${rows}
+    </table>
+  `;
+
+  shoppingList.scrollIntoView({ behavior: 'smooth' });
+}
+</script>{% endraw %}
+</body>
+</html>

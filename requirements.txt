@@ -1,0 +1,7 @@
+torch
+open-clip-torch
+faiss-cpu
+pillow
+numpy
+easyocr
+ultralytics
