@@ -123,6 +123,14 @@
   .finalize-btn:hover { background: #1557b0; }
   .finalize-btn:disabled { background: #ccc; cursor: default; }
 
+  /* OCR text chip */
+  .ocr-chip {
+    display: inline-block; margin-top: 6px; padding: 2px 8px;
+    background: #f0f4ff; border: 1px solid #c5d3f0; border-radius: 4px;
+    font-size: 11px; color: #4a5f9e; font-family: monospace;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
   /* Shopping list */
   .shopping-list { display: none; background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); margin-top: 16px; }
   .shopping-list h2 { font-size: 17px; margin-bottom: 12px; }
@@ -130,6 +138,12 @@
   .shopping-list th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #e0e0e0; color: #666; font-weight: 600; }
   .shopping-list td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }
   .shopping-list .method { font-size: 12px; color: #888; }
+  .export-btn {
+    padding: 7px 16px; border: 1px solid #1a73e8; border-radius: 6px;
+    background: #fff; color: #1a73e8; cursor: pointer; font-size: 13px;
+    margin-left: 12px; transition: all 0.15s;
+  }
+  .export-btn:hover { background: #e8f0fe; }
 
   /* Timing bar */
   .timing { font-size: 12px; color: #888; margin-top: 8px; text-align: right; }
@@ -344,14 +358,21 @@ function renderCards(d) {
 
     let bodyHTML = '';
 
+    const ocrChip = det.ocr_text
+      ? `<div><span class="label">OCR:</span> <span class="ocr-chip" title="${det.ocr_text}">${det.ocr_text}</span></div>`
+      : '';
+
     if (det.tier === 'CONFIDENT') {
       bodyHTML = `
         <div>Product <b>${topPid}</b></div>
-        <div class="label">Auto-added (score: ${topScore}, margin: ${det.confidence.margin.toFixed(3)})</div>
+        <div class="label">Score: ${topScore} &nbsp;|&nbsp; Margin: ${det.confidence.margin.toFixed(3)}</div>
+        ${ocrChip}
       `;
     } else if (det.tier === 'AMBIGUOUS') {
       bodyHTML = `
-        <div class="label">Pick the correct product:</div>
+        <div class="label">Score: ${topScore} &nbsp;|&nbsp; Margin: ${det.confidence.margin.toFixed(3)} (below threshold)</div>
+        ${ocrChip}
+        <div class="label" style="margin-top:8px;">Pick the correct product:</div>
         <div class="candidates" id="cand-${i}">
           ${det.top_k.slice(0, 3).map((c, j) => `
             <button data-det="${i}" data-pid="${c.product_id}" onclick="pickCandidate(this)">
@@ -369,6 +390,7 @@ function renderCards(d) {
         : 'No matches';
       bodyHTML = `
         <div class="label">${bestInfo}</div>
+        ${ocrChip}
         <div class="manual-input">
           <input type="text" placeholder="Product ID" id="manual-${i}">
           <button onclick="manualOverride(${i})">Set</button>
@@ -460,7 +482,10 @@ function renderShoppingList(data) {
   `).join('');
 
   shoppingList.innerHTML = `
-    <h2>Shopping List (${data.items.length} items)</h2>
+    <div style="display:flex; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Shopping List (${data.items.length} items)</h2>
+      <button class="export-btn" onclick="exportCSV()">Download CSV</button>
+    </div>
     <table>
       <tr><th>#</th><th>Product</th><th>Score</th><th>Method</th></tr>
       ${rows}
@@ -468,6 +493,29 @@ function renderShoppingList(data) {
   `;
 
   shoppingList.scrollIntoView({ behavior: 'smooth' });
+}
+
+function exportCSV() {
+  if (!scanData) return;
+  const resp = fetch('/api/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ detections: scanData.detections, overrides }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      const lines = ['detection,product_id,score_pct,method'];
+      data.items.forEach(item => {
+        lines.push(`${item.index + 1},${item.product_id},${(item.score * 100).toFixed(1)},${item.method}`);
+      });
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'shopping_list.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
 }
 </script>{% endraw %}
 </body>

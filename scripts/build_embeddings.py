@@ -1,5 +1,6 @@
 """Build catalog embeddings from in-vitro images."""
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,14 @@ def collect_catalog_images(invitro_dir: Path) -> list[dict]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Build catalog embeddings from inVitro images.")
+    parser.add_argument(
+        "--adapter", type=str, default=None,
+        help="Optional path to a CLIPAdapter checkpoint. "
+             "Embeddings will be passed through the adapter before saving.",
+    )
+    args = parser.parse_args()
+
     print("=== Build Catalog Embeddings ===\n")
 
     # 1. Collect images
@@ -50,9 +59,9 @@ def main() -> None:
     print(f"  Found {len(entries)} images across {len(products)} products\n")
 
     # 2. Load embedder
-    print("Loading CLIP ViT-B/32 ...")
+    print("Loading CLIP embedder ...")
     embedder = Embedder()
-    embedder.load()
+    embedder.load(adapter_path=args.adapter)
     print("  Model ready.\n")
 
     # 3. Compute embeddings in batches

@@ -27,8 +27,9 @@ from src.config import (
 )
 from src.detector import Detector, Detection
 from src.embedder import Embedder
-from src.index import load_sku_index, load_sku_labels, search, compute_confidence
+from src.index import load_sku_index, load_sku_labels, search_sku, compute_confidence
 from src.ocr import extract_text_pil, text_rerank, load_ocr_texts
+from src.barcode import detect_barcodes
 
 
 @dataclasses.dataclass
@@ -71,16 +72,38 @@ def recognize_detection(
     ocr_reader=None,
     sku_ocr_texts: dict[str, str] | None = None,
 ) -> ScanResult:
-    """Run full recognition pipeline on a single detection crop."""
-    # Embed with multicrop (best mode)
+    """Run full recognition pipeline on a single detection crop.
+
+    Pipeline:
+      1. Barcode/QR detection — if found, use the barcode data as the product
+         ID directly (CONFIDENT, no visual search needed).
+      2. Multi-crop CLIP embedding.
+      3. search_sku() with multi-prototype aggregation.
+      4. Optional BM25 OCR reranking.
+      5. Confidence gating → CONFIDENT / AMBIGUOUS / UNKNOWN.
+    """
+    # ── Step 1: Barcode short-circuit ────────────────────
+    barcodes = detect_barcodes(det.crop)
+    if barcodes:
+        barcode_data = barcodes[0]["data"]
+        # Treat the barcode string as the product ID
+        conf = {"top1_score": 1.0, "margin": 1.0, "is_confident": True, "rejection_reason": None}
+        return ScanResult(
+            detection_index=index,
+            ranked_pids=[barcode_data],
+            ranked_scores=[1.0],
+            confidence=conf,
+            tier="CONFIDENT",
+            ocr_text=f"[barcode:{barcodes[0]['type']}] {barcode_data}",
+        )
+
+    # ── Step 2–3: Visual embedding + search_sku ──────────
     query_emb = embedder.embed_multicrop(det.crop)
 
     if ocr_reader and sku_ocr_texts:
-        # Deep search for OCR reranking
-        scores, indices = search(sku_index, query_emb, top_k=OCR_RERANK_DEPTH)
-        candidate_pids = [sku_labels[idx]["product_id"] for idx in indices if idx >= 0]
-        candidate_scores = [float(scores[j]) for j, idx in enumerate(indices) if idx >= 0]
-
+        candidate_pids, candidate_scores = search_sku(
+            sku_index, sku_labels, query_emb, top_k=OCR_RERANK_DEPTH
+        )
         ocr_text = extract_text_pil(det.crop, ocr_reader)
 
         if ocr_text.strip():
@@ -94,13 +117,10 @@ def recognize_detection(
             final_pids = candidate_pids[:top_k]
             final_scores = candidate_scores[:top_k]
     else:
-        # Visual-only search
-        scores, indices = search(sku_index, query_emb, top_k=top_k)
-        final_pids = [sku_labels[idx]["product_id"] for idx in indices if idx >= 0]
-        final_scores = [float(scores[j]) for j, idx in enumerate(indices) if idx >= 0]
+        final_pids, final_scores = search_sku(sku_index, sku_labels, query_emb, top_k=top_k)
         ocr_text = None
 
-    # Confidence gating
+    # ── Step 4: Confidence gating ─────────────────────────
     score_arr = np.array(final_scores) if final_scores else np.array([0.0])
     conf = compute_confidence(score_arr)
     tier = classify_tier(conf)

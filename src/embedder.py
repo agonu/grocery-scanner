@@ -28,10 +28,17 @@ class Embedder:
         self._model = None
         self._preprocess = None
         self._letterbox_transform = None
+        self._adapter = None
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def load(self) -> None:
-        """Load CLIP model and preprocessing transforms."""
+    def load(self, adapter_path: str | None = None) -> None:
+        """Load CLIP model and preprocessing transforms.
+
+        Args:
+            adapter_path: Optional path to a saved CLIPAdapter checkpoint.
+                          When provided the adapter is applied at inference
+                          time, producing adapted embeddings.
+        """
         import open_clip
 
         model, _, preprocess = open_clip.create_model_and_transforms(
@@ -44,6 +51,25 @@ class Embedder:
             transforms.ToTensor(),
             transforms.Normalize(mean=_CLIP_MEAN, std=_CLIP_STD),
         ])
+
+        self._adapter = None
+        if adapter_path is not None:
+            from src.adapter import CLIPAdapter
+            from src.config import EMBEDDING_DIM, ADAPTER_BOTTLENECK
+            adapter = CLIPAdapter(dim=EMBEDDING_DIM, bottleneck=ADAPTER_BOTTLENECK)
+            state = torch.load(adapter_path, map_location=self._device, weights_only=True)
+            adapter.load_state_dict(state)
+            adapter = adapter.to(self._device).eval()
+            self._adapter = adapter
+            print(f"  Adapter loaded from {adapter_path}")
+
+    def _apply_adapter(self, embs: torch.Tensor) -> torch.Tensor:
+        """Apply the optional adapter and re-normalise."""
+        if self._adapter is None:
+            return embs
+        with torch.no_grad():
+            embs = self._adapter(embs)
+        return embs
 
     @property
     def model(self):
@@ -66,6 +92,7 @@ class Embedder:
         with torch.no_grad():
             emb = self.model.encode_image(tensor)
             emb = emb / emb.norm(dim=-1, keepdim=True)
+        emb = self._apply_adapter(emb)
         return emb.cpu().numpy().flatten()
 
     def embed_file(self, path: str) -> np.ndarray:
@@ -84,6 +111,7 @@ class Embedder:
             with torch.no_grad():
                 embs = self.model.encode_image(tensors)
                 embs = embs / embs.norm(dim=-1, keepdim=True)
+            embs = self._apply_adapter(embs)
             all_embeddings.append(embs.cpu().numpy())
         return np.concatenate(all_embeddings, axis=0)
 
@@ -141,4 +169,5 @@ class Embedder:
 
         avg = embs.mean(dim=0, keepdim=True)
         avg = avg / avg.norm(dim=-1, keepdim=True)
+        avg = self._apply_adapter(avg)
         return avg.cpu().numpy().flatten()

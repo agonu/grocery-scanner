@@ -56,6 +56,78 @@ def search(index: faiss.IndexFlatIP, query_embedding: np.ndarray, top_k: int = 5
     return scores[0], indices[0]
 
 
+def search_sku(
+    index: faiss.IndexFlatIP,
+    sku_labels: list[dict],
+    query_embedding: np.ndarray,
+    top_k: int = 5,
+) -> tuple[list[str], list[float]]:
+    """Search SKU index with multi-prototype aggregation.
+
+    Fetches up to (top_k * 10) raw FAISS rows, takes the maximum cosine
+    score per unique SKU, and returns the top_k SKUs by that max score.
+
+    Works correctly whether the index was built with 1 or k prototypes per SKU.
+
+    Returns:
+        (pids, scores) — lists of length ≤ top_k, sorted descending.
+    """
+    search_depth = min(index.ntotal, max(top_k * 10, 50))
+    raw_scores, raw_indices = search(index, query_embedding, top_k=search_depth)
+
+    sku_max: dict[str, float] = {}
+    for score, idx in zip(raw_scores, raw_indices):
+        if idx < 0 or idx >= len(sku_labels):
+            continue
+        pid = sku_labels[idx]["product_id"]
+        if pid not in sku_max or score > sku_max[pid]:
+            sku_max[pid] = float(score)
+
+    sorted_skus = sorted(sku_max.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    pids = [p for p, _ in sorted_skus]
+    scores = [s for _, s in sorted_skus]
+    return pids, scores
+
+
+def search_two_stage(
+    sku_index: faiss.IndexFlatIP,
+    sku_labels: list[dict],
+    image_index: faiss.IndexFlatIP,
+    image_embeddings: np.ndarray,
+    pid_to_img_indices: dict[str, np.ndarray],
+    query_embedding: np.ndarray,
+    top_k: int = 5,
+    n_coarse: int = 20,
+) -> tuple[list[str], list[float]]:
+    """Two-stage retrieval: coarse SKU prototype search → image-level rerank.
+
+    Stage 1: Retrieve n_coarse candidate SKUs from the prototype index.
+    Stage 2: For each candidate, compute the max cosine similarity against
+             all of its individual catalog images and re-sort by that score.
+
+    Returns:
+        (pids, scores) — lists of length ≤ top_k.
+    """
+    candidate_pids, _ = search_sku(sku_index, sku_labels, query_embedding, top_k=n_coarse)
+
+    query = np.ascontiguousarray(query_embedding.astype(np.float32).reshape(1, -1))
+    faiss.normalize_L2(query)
+
+    reranked = []
+    for pid in candidate_pids:
+        img_idx = pid_to_img_indices.get(pid)
+        if img_idx is None or len(img_idx) == 0:
+            continue
+        pid_embs = image_embeddings[img_idx]  # (n_imgs, D)
+        max_score = float((query @ pid_embs.T).max())
+        reranked.append((pid, max_score))
+
+    reranked.sort(key=lambda x: x[1], reverse=True)
+    pids = [p for p, _ in reranked[:top_k]]
+    scores = [s for _, s in reranked[:top_k]]
+    return pids, scores
+
+
 def expand_query(
     query_emb: np.ndarray,
     index: faiss.IndexFlatIP,

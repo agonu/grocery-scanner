@@ -19,6 +19,11 @@ def _tokenize(text: str) -> set[str]:
     return {t for t in text.split() if len(t) >= 2}
 
 
+def _tokenize_list(text: str) -> list[str]:
+    """Like _tokenize but returns a list (order-preserved, with duplicates)."""
+    return [t for t in text.split() if len(t) >= 2]
+
+
 def extract_text(image_path: str, reader) -> str:
     """Run OCR on a single image file and return cleaned text."""
     try:
@@ -74,15 +79,6 @@ def load_ocr_texts(path: Path) -> dict[str, str]:
         return json.load(f)
 
 
-def jaccard_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
-    """Compute Jaccard similarity between two token sets."""
-    if not tokens_a or not tokens_b:
-        return 0.0
-    intersection = tokens_a & tokens_b
-    union = tokens_a | tokens_b
-    return len(intersection) / len(union)
-
-
 def text_rerank(
     query_text: str,
     candidate_pids: list[str],
@@ -90,18 +86,32 @@ def text_rerank(
     sku_ocr_texts: dict[str, str],
     alpha: float = 0.85,
 ) -> list[tuple[str, float, float, float]]:
-    """Rerank candidates by fusing visual scores with OCR text similarity.
+    """Rerank candidates by fusing visual scores with BM25 text similarity.
+
+    Builds a BM25 index over the candidate OCR texts, scores against the
+    query, normalises to [0, 1], then blends:
+        final = alpha * visual + (1 - alpha) * bm25_text
 
     Returns:
-        List of (pid, final_score, visual_score, text_score) sorted by final_score desc.
+        List of (pid, final_score, visual_score, text_score) sorted desc.
     """
-    query_tokens = _tokenize(query_text)
+    from rank_bm25 import BM25Okapi
+
+    query_tokens = _tokenize_list(_clean_text(query_text))
+    corpus_tokens = [
+        _tokenize_list(_clean_text(sku_ocr_texts.get(pid, "")))
+        for pid in candidate_pids
+    ]
+
+    text_scores = [0.0] * len(candidate_pids)
+    if query_tokens and any(corpus_tokens):
+        bm25 = BM25Okapi(corpus_tokens if corpus_tokens else [[]])
+        raw = bm25.get_scores(query_tokens)
+        max_score = float(max(raw)) if max(raw) > 0 else 1.0
+        text_scores = [float(s) / max_score for s in raw]
 
     fused = []
-    for pid, vscore in zip(candidate_pids, candidate_visual_scores):
-        sku_text = sku_ocr_texts.get(pid, "")
-        sku_tokens = _tokenize(sku_text)
-        tscore = jaccard_similarity(query_tokens, sku_tokens)
+    for pid, vscore, tscore in zip(candidate_pids, candidate_visual_scores, text_scores):
         final = alpha * vscore + (1.0 - alpha) * tscore
         fused.append((pid, final, vscore, tscore))
 

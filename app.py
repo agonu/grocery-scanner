@@ -1,22 +1,27 @@
 """Flask web frontend for the Grocery Scanner.
 
 Loads all models at startup, serves a single-page UI, and provides API
-endpoints for scanning shelf images and resolving ambiguous detections.
+endpoints for scanning shelf images, resolving ambiguous detections,
+and registering new products on the fly.
 
 Usage:
     python app.py
     python app.py --port 8080
     python app.py --no-ocr          # skip OCR for faster startup
+    python app.py --adapter catalog/adapter.pt
 """
 
 import argparse
 import base64
 import importlib.util
 import io
+import json
 import sys
 import time
 from pathlib import Path
 
+import faiss
+import numpy as np
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from PIL import Image, ImageDraw
@@ -28,10 +33,15 @@ from src.config import (
     TOP_K, DETECTOR_CONF_THRESHOLD,
     OCR_TEXTS_PATH, OCR_ALPHA, OCR_RERANK_DEPTH,
     DEFAULT_SCORE_THRESHOLD, DEFAULT_MIN_MARGIN,
+    SKU_INDEX_PATH, SKU_LABELS_PATH, EMBEDDING_DIM,
+    ADAPTER_PATH,
 )
 from src.detector import Detector, Detection
 from src.embedder import Embedder
-from src.index import load_sku_index, load_sku_labels, search, compute_confidence
+from src.index import (
+    load_sku_index, load_sku_labels, save_sku_index, save_sku_labels,
+    search_sku, compute_confidence,
+)
 from src.ocr import extract_text_pil, text_rerank, load_ocr_texts
 
 # Import ScanResult and helpers from scripts/scan.py via importlib
@@ -58,7 +68,7 @@ CORS(app)
 
 
 # ── Model loading ─────────────────────────────────────────
-def load_models(use_ocr: bool = True) -> None:
+def load_models(use_ocr: bool = True, adapter_path: str | None = None) -> None:
     global detector, embedder, sku_index, sku_labels, ocr_reader, sku_ocr_texts
 
     print("Loading detector ...", end=" ", flush=True)
@@ -70,14 +80,15 @@ def load_models(use_ocr: bool = True) -> None:
     print("Loading CLIP embedder ...", end=" ", flush=True)
     t0 = time.time()
     embedder = Embedder()
-    embedder.load()
+    embedder.load(adapter_path=adapter_path)
     print(f"({time.time() - t0:.1f}s)")
 
     print("Loading SKU index ...", end=" ", flush=True)
     t0 = time.time()
     sku_index = load_sku_index()
     sku_labels = load_sku_labels()
-    print(f"({time.time() - t0:.1f}s, {sku_index.ntotal} SKUs)")
+    n_skus = len(set(l["product_id"] for l in sku_labels))
+    print(f"({time.time() - t0:.1f}s, {sku_index.ntotal} prototypes, {n_skus} SKUs)")
 
     if use_ocr and OCR_TEXTS_PATH.exists():
         print("Loading OCR text index ...", end=" ", flush=True)
@@ -157,7 +168,6 @@ def api_scan():
     detect_ms = int((time.time() - t0) * 1000)
 
     if len(detections) == 0:
-        # Whole-image fallback: treat entire image as one product
         detections = [Detection(
             box=(0, 0, img_w, img_h),
             score=1.0,
@@ -181,7 +191,6 @@ def api_scan():
     annotated = draw_annotations(image, detections, results)
     annotated_b64 = image_to_base64(annotated)
 
-    # Build response
     response = {
         "num_detections": len(detections),
         "image_size": [img_w, img_h],
@@ -232,16 +241,10 @@ def api_resolve():
         idx = det["index"]
         idx_str = str(idx)
 
-        # Check for user override
         if idx_str in overrides:
             pid = overrides[idx_str]
             score = det["top_k"][0]["score"] if det["top_k"] else 0
-            items.append({
-                "index": idx,
-                "product_id": pid,
-                "score": score,
-                "method": "user",
-            })
+            items.append({"index": idx, "product_id": pid, "score": score, "method": "user"})
         elif det["tier"] == "CONFIDENT" and det["product_id"]:
             items.append({
                 "index": idx,
@@ -249,18 +252,88 @@ def api_resolve():
                 "score": det["top_k"][0]["score"] if det["top_k"] else 0,
                 "method": "auto",
             })
-        # Skip AMBIGUOUS without override and UNKNOWN without override
 
     return jsonify({"items": items})
+
+
+@app.route("/api/register", methods=["POST"])
+def api_register():
+    """Register a new product from one or more reference images.
+
+    Accepts multipart/form-data with:
+        product_id  — (string) the product / SKU identifier
+        images      — one or more image files
+
+    Embeds all uploaded images, averages them into a single prototype, and
+    upserts it into the in-memory SKU index (and saves to disk).
+    """
+    global sku_index, sku_labels
+
+    product_id = request.form.get("product_id", "").strip()
+    if not product_id:
+        return jsonify({"error": "product_id is required"}), 400
+
+    files = request.files.getlist("images")
+    if not files:
+        return jsonify({"error": "At least one image is required"}), 400
+
+    images = []
+    for f in files:
+        try:
+            images.append(Image.open(f.stream).convert("RGB"))
+        except Exception as e:
+            return jsonify({"error": f"Invalid image '{f.filename}': {e}"}), 400
+
+    # Embed and compute prototype
+    embs = embedder.embed_batch(images)
+    prototype = embs.mean(axis=0).astype(np.float32)
+    norm = np.linalg.norm(prototype)
+    if norm > 0:
+        prototype /= norm
+
+    # Remove existing entry for this product if present
+    existing = [l for l in sku_labels if l["product_id"] == product_id]
+    if existing:
+        keep_rows = [i for i, l in enumerate(sku_labels) if l["product_id"] != product_id]
+        all_vecs = np.zeros((sku_index.ntotal, EMBEDDING_DIM), dtype=np.float32)
+        sku_index.reconstruct_n(0, sku_index.ntotal, all_vecs)
+        kept_vecs = np.ascontiguousarray(all_vecs[keep_rows])
+        new_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        if len(kept_vecs):
+            new_index.add(kept_vecs)
+        sku_labels = [
+            {"index": new_i, "product_id": sku_labels[old_i]["product_id"]}
+            for new_i, old_i in enumerate(keep_rows)
+        ]
+        sku_index = new_index
+
+    new_idx = sku_index.ntotal
+    sku_index.add(prototype.reshape(1, -1))
+    sku_labels.append({"index": new_idx, "product_id": product_id})
+
+    # Persist to disk
+    save_sku_index(sku_index)
+    save_sku_labels(sku_labels)
+
+    n_skus = len(set(l["product_id"] for l in sku_labels))
+    return jsonify({
+        "registered": product_id,
+        "images_used": len(images),
+        "catalog_skus": n_skus,
+        "catalog_prototypes": sku_index.ntotal,
+    })
 
 
 # ── Entry point ───────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Grocery Scanner web frontend.")
-    parser.add_argument("--port", type=int, default=5000, help="Port (default: 5000).")
+    parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--no-ocr", action="store_true", help="Skip OCR for faster startup.")
+    parser.add_argument("--adapter", type=str, default=None,
+                        help="Path to CLIPAdapter checkpoint.")
     args = parser.parse_args()
 
-    load_models(use_ocr=not args.no_ocr)
+    adapter_path = args.adapter or (str(ADAPTER_PATH) if ADAPTER_PATH.exists() else None)
+    load_models(use_ocr=not args.no_ocr, adapter_path=adapter_path)
     print(f"\nStarting server on http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False)

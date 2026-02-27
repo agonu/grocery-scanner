@@ -1,7 +1,13 @@
 torch
+torchvision
 open-clip-torch
 faiss-cpu
 pillow
 numpy
 easyocr
 ultralytics
+flask
+flask-cors
+rank-bm25
+pyzbar
+peft

@@ -22,11 +22,24 @@ SKU_INDEX_PATH = CATALOG_DIR / "sku.index"
 INVITRO_URL = "https://grozi.calit2.net/GroZi-120/inVitro.zip"
 INSITU_URL = "https://grozi.calit2.net/GroZi-120/inSitu.zip"
 
-# ── Model ────────────────────────────────────────────────
+# ── Model (baseline) ─────────────────────────────────────
 CLIP_MODEL = "ViT-L-14"
 CLIP_PRETRAINED = "openai"
 EMBEDDING_DIM = 768
 TOP_K = 5
+
+# ── Alternative backbones ────────────────────────────────
+# To switch backbone, change the three vars above and rebuild embeddings + indexes.
+# SigLIP-L:  ("ViT-SO400M-14-SigLIP-384", "webli",              1152)
+# EVA-02-L:  ("EVA02-L-14-336",            "merged2b_s6b_b61k",  768)
+
+# ── Multi-prototype indexing ─────────────────────────────
+# k-means cluster centres stored per SKU. 1 = original mean-prototype.
+SKU_NUM_PROTOTYPES = 1
+
+# ── Adapter finetuning ───────────────────────────────────
+ADAPTER_PATH = CATALOG_DIR / "adapter.pt"
+ADAPTER_BOTTLENECK = 256  # bottleneck hidden dim
 
 # ── Query Expansion ────────────────────────────────────
 EXPAND_TOP_K = 3
